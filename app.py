@@ -43,7 +43,6 @@ def _safe_formula_value(val):
     """Wrap strings in quotes for Airtable formula; leave numbers/plain as-is."""
     if isinstance(val, (int, float)):
         return str(val)
-    # escape double quotes
     s = str(val).replace('"', r'\"')
     return f'"{s}"'
 
@@ -65,7 +64,6 @@ def get_participant_events(user_id):
 
         for rec in attendances:
             ev = rec.get("fields", {}).get("event_id")
-            # handle list / scalar / str / number
             values = ev if isinstance(ev, list) else [ev]
             for v in values:
                 if isinstance(v, str) and v.lower().startswith("rec"):
@@ -133,7 +131,6 @@ def get_participant_events(user_id):
         st.error(f"Etkinlikler yüklenirken hata oluştu: {e}")
         return []
 
-
 # -----------------------------
 # UI helpers
 # -----------------------------
@@ -159,24 +156,40 @@ def render_event_card(ev):
             st.markdown(f"**Kapasite:** {ev.get('capacity',0)}")
             st.markdown(f"**Event Kayıt ID:** {ev.get('record_id','')}")
 
+def render_navbar():
+    """Simple top navigation like tabs."""
+    with st.container():
+        st.markdown(" ")
+        c1, c2, c3 = st.columns([1,1,1])
+        with c1:
+            st.page_link("app.py", label="🏠 Ana Sayfa")
+        with c2:
+            st.page_link("pages/join_by_code.py", label="🎫 Koda Katıl")
+        with c3:
+            st.page_link("pages/profile.py", label="👤 Profil")
+        st.markdown("---")
+
 # -----------------------------
 # Page
 # -----------------------------
 def main():
     st.title("🏠 Ana Sayfa (Katılımcı)")
+    render_navbar()
 
     # Persist current user id (like host_id in host app)
     if "current_user_id" not in st.session_state:
         st.session_state.current_user_id = 2000
 
+    # No min/max bounds; keep integer input
     user_id = st.sidebar.number_input(
         "User ID",
-        min_value=1000, max_value=9999,
-        value=st.session_state.current_user_id,
+        value=int(st.session_state.current_user_id),
+        step=1,
+        format="%d",
         help="Kullanıcı kimliğinizi değiştirerek test edebilirsiniz.",
         key="user_id_input",
     )
-    st.session_state.current_user_id = user_id
+    st.session_state.current_user_id = int(user_id)
 
     # Top actions
     top = st.container()
@@ -184,16 +197,16 @@ def main():
         c1, c2 = st.columns([1, 3])
         with c1:
             if st.button("🎫 Kod ile Etkinliğe Katıl", type="primary", use_container_width=True):
-                st.session_state.participant_user_id = user_id
+                st.session_state.participant_user_id = int(user_id)
                 st.switch_page("pages/join_by_code.py")
         with c2:
             st.info("🗓️ **My Agenda** — Buradan takvim görünümüne gidecek (henüz bağlanmadı).")
 
     st.markdown("---")
 
-    # Section: Your events (from event_attendance)
+    # Section: Your events
     st.header("🎟️ Etkinliklerin")
-    my_events = get_participant_events(user_id)
+    my_events = get_participant_events(int(user_id))
     if my_events:
         for ev in my_events:
             render_event_card(ev)
