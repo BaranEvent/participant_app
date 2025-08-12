@@ -83,6 +83,7 @@ def get_participant_events(user_id):
                 f = er.get("fields", {})
                 events.append({
                     "record_id": er["id"],
+                    "numeric_id": f.get("id"),
                     "name": f.get("name", ""),
                     "description": f.get("description", ""),
                     "type": f.get("type", ""),
@@ -106,6 +107,7 @@ def get_participant_events(user_id):
                     f = er.get("fields", {})
                     events.append({
                         "record_id": er["id"],
+                        "numeric_id": f.get("id"),
                         "name": f.get("name", ""),
                         "description": f.get("description", ""),
                         "type": f.get("type", ""),
@@ -155,18 +157,25 @@ def render_event_card(ev):
             st.markdown(f"**Host ID:** {ev.get('host_id','')}")
             st.markdown(f"**Kapasite:** {ev.get('capacity',0)}")
             st.markdown(f"**Event Kayıt ID:** {ev.get('record_id','')}")
+            # NEW: Event App button -> go to pages/event_app.py with selected event in session
+            if st.button("📱 Etkinlik Uygulaması", key=f"go_{ev['record_id']}", use_container_width=True):
+                st.session_state.selected_event_record_id = ev["record_id"]
+                st.session_state.selected_event_numeric_id = ev.get("numeric_id")
+                st.switch_page("pages/event_app.py")
 
 def render_navbar():
     """Simple top navigation like tabs."""
     with st.container():
         st.markdown(" ")
-        c1, c2, c3 = st.columns([1,1,1])
+        c1, c2, c3,c4 = st.columns([1,1,1,1])
         with c1:
             st.page_link("app.py", label="🏠 Ana Sayfa")
         with c2:
             st.page_link("pages/join_by_code.py", label="🎫 Koda Katıl")
         with c3:
             st.page_link("pages/profile.py", label="👤 Profil")
+        with c4:
+            st.page_link("pages/events.py", label="🎫 Etkinlikler")
         st.markdown("---")
 
 # -----------------------------
