@@ -50,7 +50,7 @@ def user_participation_sets(user_id: int):
 def load_upcoming_visible_events():
     # Only visible + start_date in the future
     formula = "AND({is_visible} = 1, IS_AFTER({start_date}, NOW()))"
-    # IMPORTANT: pyairtable wants sort as list[str]
+    # pyairtable wants sort as list[str]
     rows = t("events").all(formula=formula, sort=["start_date"])
     events = []
     for r in rows:
@@ -65,10 +65,55 @@ def load_upcoming_visible_events():
             "detailed_address": f.get("detailed_address",""),
             "start_date": f.get("start_date",""),
             "end_date": f.get("end_date",""),
+            "host_id": f.get("host_id"),
         })
     # Extra client-side safety
-    events.sort(key=lambda e: parse_iso(e.get("end_date")) or datetime.max)
+    events.sort(key=lambda e: parse_iso(e.get("start_date")) or datetime.max)
     return events
+
+def ensure_numeric_event_id(record_id: str) -> int | None:
+    """Fetch events.{id} for a given record if needed."""
+    try:
+        row = t("events").get(record_id)
+        f = row.get("fields", {})
+        if f.get("id") is None:
+            return None
+        return int(f["id"])
+    except Exception:
+        return None
+
+def create_participant_notification(ev: dict, participant_id: int):
+    """
+    Create participant_notifications row:
+    - participant_id (int)
+    - event_id (int)
+    - type = "event_start"
+    - message = "<name> Başlıyor !!"
+    - notify_date = event start_date
+    - is_active = true
+    - created_by = events.host_id
+    """
+    event_id_num = ev.get("numeric_id")
+    if event_id_num is None:
+        event_id_num = ensure_numeric_event_id(ev.get("record_id"))
+    if event_id_num is None:
+        # can't create a valid int event_id, skip gracefully
+        return
+
+    payload = {
+        "participant_id": int(participant_id),
+        "event_id": int(event_id_num),
+        "type": "event_start",
+        "message": f"{ev.get('name','Etkinlik')} Başlıyor !!",
+        "notify_date": ev.get("start_date", ""),
+        "is_active": True,
+        "created_by": ev.get("host_id"),
+    }
+    try:
+        t("participant_notifications").create(payload)
+    except Exception as e:
+        # non-fatal for the join flow
+        st.warning(f"Bildirim oluşturulamadı: {e}")
 
 def render_event_card(ev, user_id, already_numeric_ids, already_rec_ids):
     # Hide if user already participating
@@ -89,12 +134,21 @@ def render_event_card(ev, user_id, already_numeric_ids, already_rec_ids):
         with c2:
             if st.button("Evente Katıl", key=f"join_{ev['record_id']}", use_container_width=True):
                 try:
-                    payload = {
+                    # Create participation (prefer numeric id)
+                    event_id_num = ev.get("numeric_id")
+                    if event_id_num is None:
+                        event_id_num = ensure_numeric_event_id(ev["record_id"])
+                    if event_id_num is None:
+                        raise ValueError("Event numeric id not found.")
+
+                    t("event_participants").create({
                         "participant_id": int(user_id),
-                        # prefer numeric id; fallback to record id if that's what your schema expects
-                        "event_id": int(ev["numeric_id"]) if ev.get("numeric_id") is not None else ev["record_id"],
-                    }
-                    t("event_participants").create(payload)
+                        "event_id": int(event_id_num),
+                    })
+
+                    # Create participant notification
+                    create_participant_notification(ev, int(user_id))
+
                     st.success("Etkinliğe katıldın!")
                     st.rerun()
                 except Exception as e:

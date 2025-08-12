@@ -1,117 +1,121 @@
 import streamlit as st
 from pyairtable import Api
-from datetime import datetime
 
-st.set_page_config(page_title="Kod ile Etkinliğe Katıl", page_icon="🎫", layout="centered")
+st.set_page_config(page_title="Join by Code", page_icon="🎫", layout="wide")
 
 AIRTABLE_CONFIG = {
     "base_id": "applJyRTlJLvUEDJs",
     "api_key": "patJHZQyID8nmSaxh.1bcf08f100bd723fd85d67eff8534a19f951b75883d0e0ae4cc49743a9fb3131",
 }
 
-def get_airtable_api():
-    return Api(AIRTABLE_CONFIG["api_key"])
+def api(): return Api(AIRTABLE_CONFIG["api_key"])
+def t(name): return api().table(AIRTABLE_CONFIG["base_id"], name)
 
-def get_airtable_table(table_name: str):
-    return get_airtable_api().table(AIRTABLE_CONFIG["base_id"], table_name)
+def navbar():
+    c1, c2, c3, c4 = st.columns([1,1,1,1])
+    with c1: st.page_link("app.py", label="🏠 Ana Sayfa")
+    with c2: st.page_link("pages/events.py", label="🗓️ Events")
+    with c3: st.page_link("pages/join_by_code.py", label="🎫 Koda Katıl")
+    with c4: st.page_link("pages/profile.py", label="👤 Profil")
+    st.markdown("---")
 
-def _parse_iso(v):
+def get_user_id():
+    if "current_user_id" not in st.session_state:
+        st.session_state.current_user_id = 2000
+    return int(st.session_state.current_user_id)
+
+def ensure_event_by_code(code: int):
+    """Fetch a single event by its numeric {id} code (returns Airtable row)."""
     try:
-        if isinstance(v, str):
-            v = v.replace("Z", "").replace("+00:00", "")
-            dt = datetime.fromisoformat(v)
-        else:
-            dt = v
-        if dt and getattr(dt, "tzinfo", None) is not None:
-            dt = dt.replace(tzinfo=None)
-        return dt
+        rows = t("events").all(formula=f"{{id}} = {int(code)}", max_records=1)
+        return rows[0] if rows else None
     except Exception:
         return None
 
-def _safe_formula_value(val):
-    if isinstance(val, (int, float)):
-        return str(val)
-    s = str(val).replace('"', '\\"')
-    return f'"{s}"'
-
-st.title("🎫 Kod ile Etkinliğe Katıl")
-
-user_id = st.session_state.get("participant_user_id", 2000)
-st.write(f"**User ID:** {user_id}")
-
-event_code = st.text_input("Etkinlik Kodu (events tablosu 'id' veya record ID - rec...)")
-
-if st.button("Kaydol", type="primary", use_container_width=True):
-    code = event_code.strip()
-    if not code:
-        st.error("Lütfen bir etkinlik kodu girin.")
-        st.stop()
-
-    events_tbl = get_airtable_table("events")
-    parts_tbl  = get_airtable_table("event_participants")  # numeric event_id table
-
-    # ---------- Resolve event by rec... or numeric/string {id} ----------
-    event_rec = None
-    numeric_event_id = None
-
-    if code.lower().startswith("rec"):
-        try:
-            event_rec = events_tbl.get(code)
-            numeric_event_id = event_rec.get("fields", {}).get("id")  # your numeric id
-        except Exception:
-            event_rec = None
-
-    if event_rec is None:
-        candidates = []
-        # try numeric
-        try:
-            numeric_event_id = int(code)
-            candidates = events_tbl.all(formula=f"{{id}} = {numeric_event_id}", max_records=1)
-        except ValueError:
-            # try string equality on {id} as fallback
-            candidates = events_tbl.all(formula=f"{{id}} = {_safe_formula_value(code)}", max_records=1)
-        if candidates:
-            event_rec = candidates[0]
-
-    if event_rec is None or numeric_event_id is None:
-        st.error("Geçersiz etkinlik kodu. Lütfen kontrol edin.")
-        st.stop()
-
-    f = event_rec.get("fields", {})
-
-    # ---------- end_date must be in the future ----------
-    end_dt = _parse_iso(f.get("end_date"))
-    if not end_dt:
-        st.error("Etkinliğin bitiş tarihi bulunamadı. Lütfen organizatörle iletişime geçin.")
-        st.stop()
-    if end_dt <= datetime.now():
-        st.error("Bu etkinlik sona ermiş. Kayıt yapılamaz.")
-        st.stop()
-
-    # ---------- uniqueness: participant_id + numeric event_id ----------
-    uniq_formula = (
-        f"AND("
-        f"{{participant_id}} = {_safe_formula_value(user_id)}, "
-        f"{{event_id}} = {numeric_event_id}"
-        f")"
-    )
+def already_joined(participant_id: int, event_numeric_id: int) -> bool:
+    """Check if a row exists in event_participants for this user & event."""
     try:
-        existing = parts_tbl.all(formula=uniq_formula, max_records=1)
-    except Exception as e:
-        st.error(f"Kayıt kontrolünde hata: {e}")
-        st.stop()
+        formula = f"AND({{participant_id}} = {int(participant_id)}, {{event_id}} = {int(event_numeric_id)})"
+        rows = t("event_participants").all(formula=formula, max_records=1)
+        return len(rows) > 0
+    except Exception:
+        return False
 
-    if existing:
-        st.error("Zaten bu etkinliğe kayıtlısınız.")
-        st.stop()
-
-    # ---------- create registration (numeric event_id) ----------
+def create_participant_notification_from_row(event_row: dict, participant_id: int):
+    """Insert participant_notifications for event start."""
+    f = event_row.get("fields", {})
+    if f.get("id") is None:
+        return
+    payload = {
+        "participant_id": int(participant_id),
+        "event_id": int(f["id"]),
+        "type": "event_start",
+        "message": f"{f.get('name','Etkinlik')} Başlıyor !!",
+        "notify_date": f.get("start_date", ""),
+        "is_active": True,
+        "created_by": f.get("host_id"),
+    }
     try:
-        parts_tbl.create({
-            "participant_id": user_id,
-            "event_id": numeric_event_id,   # plain integer
-        })
-        st.success("Kaydın alındı! Ana sayfaya yönlendiriliyorsun…")
-        st.switch_page("app.py")  # back to home
+        t("participant_notifications").create(payload)
     except Exception as e:
-        st.error(f"Kayıt sırasında hata: {e}")
+        # non-fatal for flow
+        st.warning(f"Bildirim oluşturulamadı: {e}")
+
+def redirect_to_event_app(ev_row: dict):
+    """Set session context and go to event_app page."""
+    f = ev_row.get("fields", {})
+    st.session_state.selected_event_record_id = ev_row["id"]
+    st.session_state.selected_event_numeric_id = f.get("id")
+    st.switch_page("pages/event_app.py")
+
+def main():
+    st.title("🎫 Koda Katıl")
+    navbar()
+
+    # user id
+    current_id = get_user_id()
+    new_id = st.sidebar.number_input("User ID", value=int(current_id), step=1, format="%d")
+    st.session_state.current_user_id = int(new_id)
+    participant_id = int(new_id)
+
+    code = st.text_input("Etkinlik Kodu (numeric `events.id`)", placeholder="Örn: 1024")
+
+    if st.button("Devam", type="primary"):
+        if not code or not code.isdigit():
+            st.error("Lütfen geçerli bir sayısal kod girin.")
+            return
+
+        ev = ensure_event_by_code(int(code))
+        if not ev:
+            st.error("Etkinlik bulunamadı.")
+            return
+
+        f = ev.get("fields", {})
+        event_numeric_id = f.get("id")
+        if event_numeric_id is None:
+            st.error("Etkinlik numarası bulunamadı (events.id).")
+            return
+
+        # If already joined -> inform and redirect
+        if already_joined(participant_id, int(event_numeric_id)):
+            st.info("Bu etkinliğe zaten katıldın, yönlendiriliyorsun…")
+            redirect_to_event_app(ev)
+            return
+
+        # NEW: Auto-join + notification + redirect
+        try:
+            # Create participation
+            t("event_participants").create({
+                "participant_id": participant_id,
+                "event_id": int(event_numeric_id),
+            })
+            # Create notification
+            create_participant_notification_from_row(ev, participant_id)
+
+            st.success("Etkinliğe katıldın! Yönlendiriliyorsun…")
+            redirect_to_event_app(ev)
+        except Exception as e:
+            st.error(f"Katılım oluşturulurken hata: {e}")
+
+if __name__ == "__main__":
+    main()
