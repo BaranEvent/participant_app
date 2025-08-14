@@ -119,7 +119,14 @@ def main():
     display_name = prof["display_name"] or "Kullanıcı"
     description  = prof["description"]
 
-    st.markdown("## 👤 Profil")
+    # === Title row with Add Friend button (top-right) ===
+    row = st.columns([6,1])
+    with row[0]:
+        st.markdown("## 👤 Profil")
+    with row[1]:
+        if st.button("👥 Arkadaş Ekle", use_container_width=True):
+            st.switch_page("pages/add_friend.py")
+
     header = st.container()
     with header:
         a, b = st.columns([1,3])
