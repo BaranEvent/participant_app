@@ -1,5 +1,6 @@
 import streamlit as st
 from pyairtable import Api
+import io
 
 st.set_page_config(page_title="Barkod Tara", page_icon="📷", layout="wide")
 
