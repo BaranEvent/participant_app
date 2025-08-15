@@ -9,6 +9,8 @@ AIRTABLE_CONFIG = {
     "api_key": "patJHZQyID8nmSaxh.1bcf08f100bd723fd85d67eff8534a19f951b75883d0e0ae4cc49743a9fb3131",
 }
 
+FRIENDS_TABLE = "friends"  # adding_user_id (int), added_user_id (int), is_active (bool)
+
 def get_airtable_api():
     return Api(AIRTABLE_CONFIG["api_key"])
 
@@ -33,6 +35,12 @@ def _safe_formula_value(val):
         return str(val)
     return f"\"{str(val).replace('\"', '\\\"')}\""
 
+def _current_user_id() -> int:
+    # Always define a current user id
+    if "current_user_id" not in st.session_state:
+        st.session_state.current_user_id = 2000
+    return int(st.session_state.current_user_id)
+
 def render_navbar():
     with st.container():
         c1, c2, c3 = st.columns([1,1,1])
@@ -41,14 +49,19 @@ def render_navbar():
         with c2:
             st.page_link("pages/join_by_code.py", label="🎫 Koda Katıl")
         with c3:
-            st.page_link("pages/profile.py", label="👤 Profil")
+            # IMPORTANT: clicking this must always reset any “view other profile” flags
+            if st.button("👤 Profil", use_container_width=True):
+                # hard reset: show own profile on next render
+                st.session_state["allow_profile_view_other"] = False
+                st.session_state["profile_view_user_id"] = None
+                st.switch_page("pages/profile.py")
         st.markdown("---")
 
-def get_profile(user_id):
+def get_profile(user_id: int):
     """Read from 'participants' table: show name + description (no numeric id shown)."""
     try:
         tbl = get_airtable_table("participants")
-        recs = tbl.all(formula=f"{{id}} = {user_id}", max_records=1)
+        recs = tbl.all(formula=f"{{id}} = {int(user_id)}", max_records=1)
         if not recs:
             recs = tbl.all(formula=f"{{id}} = {_safe_formula_value(user_id)}", max_records=1)
         if recs:
@@ -62,12 +75,12 @@ def get_profile(user_id):
         pass
     return {"display_name": "", "description": "", "avatar_url": ""}
 
-def get_user_events(user_id):
+def get_user_events(user_id: int):
     """Read event_participants for this user, then fetch events by numeric {id}."""
     try:
         parts = get_airtable_table("event_participants")
         events_tbl = get_airtable_table("events")
-        rows = parts.all(formula=f"{{participant_id}} = {user_id}")
+        rows = parts.all(formula=f"{{participant_id}} = {int(user_id)}")
         event_ids = []
         for r in rows:
             ev = r.get("fields", {}).get("event_id")
@@ -111,11 +124,57 @@ def grid_events(events, cols=3):
                 if ev.get("location_name"):
                     st.caption(ev["location_name"])
 
+def load_active_friends(user_id: int):
+    """
+    Return a list of dicts: [{"friend_id": int, "record_ids": [rec...]}]
+    Active friendships = (adding_user_id=user OR added_user_id=user) AND is_active=1.
+    """
+    try:
+        tbl = get_airtable_table(FRIENDS_TABLE)
+        formula = (
+            f"AND("
+            f"OR({{adding_user_id}} = {int(user_id)}, {{added_user_id}} = {int(user_id)}),"
+            f"{{is_active}} = 1"
+            f")"
+        )
+        rows = tbl.all(formula=formula)
+        friends = {}
+        for r in rows:
+            f = r.get("fields", {})
+            a = f.get("adding_user_id")
+            b = f.get("added_user_id")
+            if a is None or b is None:
+                continue
+            other = int(b) if int(a) == int(user_id) else int(a)
+            if other not in friends:
+                friends[other] = {"friend_id": other, "record_ids": []}
+            friends[other]["record_ids"].append(r.get("id"))
+        return list(friends.values())
+    except Exception:
+        return []
+
+def _resolve_profile_user_id():
+    """
+    Always default to current user's own profile.
+    Allow a one-time view of another user's profile ONLY if a dedicated flag is set.
+    Immediately clear that flag to prevent sticky navigation.
+    """
+    current_uid = _current_user_id()
+    view_uid = current_uid
+    if st.session_state.get("allow_profile_view_other") and st.session_state.get("profile_view_user_id") is not None:
+        try:
+            view_uid = int(st.session_state.get("profile_view_user_id"))
+        except Exception:
+            view_uid = current_uid
+    # Clear the permission so the next time Profile is clicked, we show own profile
+    st.session_state["allow_profile_view_other"] = False
+    return current_uid, view_uid
+
 def main():
-    user_id = st.session_state.get("current_user_id") or st.session_state.get("participant_user_id") or 2000
+    current_user_id, view_user_id = _resolve_profile_user_id()
     render_navbar()
 
-    prof = get_profile(user_id)
+    prof = get_profile(view_user_id)
     display_name = prof["display_name"] or "Kullanıcı"
     description  = prof["description"]
 
@@ -137,12 +196,27 @@ def main():
                 st.markdown("<div style='font-size:80px;line-height:1;'>🧑</div>", unsafe_allow_html=True)
         with b:
             st.markdown(f"### {display_name}")
-            sub_a, sub_b, sub_c, sub_d = st.columns([1,1,1,1])
-            events = get_user_events(user_id)
-            with sub_a: st.metric("Etkinlik", len(events))
-            with sub_b: st.metric("Takipçi", 0)
-            with sub_c: st.metric("Takip", 0)
-            with sub_d: st.button("Profili Düzenle", use_container_width=True, disabled=True)
+
+            # Stats row: Events + Friends
+            sub_a, sub_b, sub_c = st.columns([1,1,1])
+
+            events = get_user_events(view_user_id)
+            friends_info = load_active_friends(view_user_id)
+            friends_count = len(friends_info)
+
+            with sub_a:
+                st.metric("Etkinlik", len(events))
+            with sub_b:
+                # Only allow navigating to friends list if viewing OWN profile
+                is_own_profile = (view_user_id == current_user_id)
+                if is_own_profile:
+                    if st.button(f"Arkadaşlar ({friends_count})", use_container_width=True):
+                        st.switch_page("pages/friends.py")
+                else:
+                    st.button(f"Arkadaşlar ({friends_count})", use_container_width=True, disabled=True)
+            with sub_c:
+                st.button("Profili Düzenle", use_container_width=True, disabled=True)
+
             if description:
                 st.caption(description)
 
@@ -159,12 +233,15 @@ def main():
 
     # Tabs: Events, Photos/Videos, Saved
     tab_events, tab_media, tab_saved = st.tabs(["🗂️ Etkinlikler", "📷 Fotoğraf/Videolar", "🔖 Kaydedilenler"])
+
     with tab_events:
         grid_events(events)
+
     with tab_media:
-        st.info("Fotoğraf ve videolar yakında.")
+        st.info("Medya henüz yok.")
+
     with tab_saved:
-        st.info("Kaydedilenler yakında.")
+        st.info("Kaydedilenler henüz yok.")
 
 if __name__ == "__main__":
     main()
