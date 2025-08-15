@@ -157,7 +157,7 @@ def render_event_card(ev):
             st.markdown(f"**Host ID:** {ev.get('host_id','')}")
             st.markdown(f"**Kapasite:** {ev.get('capacity',0)}")
             st.markdown(f"**Event Kayıt ID:** {ev.get('record_id','')}")
-            # NEW: Event App button -> go to pages/event_app.py with selected event in session
+            # Go to event app
             if st.button("📱 Etkinlik Uygulaması", key=f"go_{ev['record_id']}", use_container_width=True):
                 st.session_state.selected_event_record_id = ev["record_id"]
                 st.session_state.selected_event_numeric_id = ev.get("numeric_id")
@@ -167,7 +167,8 @@ def render_navbar():
     """Simple top navigation like tabs."""
     with st.container():
         st.markdown(" ")
-        c1, c2, c3,c4 = st.columns([1,1,1,1])
+        # Kept original structure
+        c1, c2, c3, c4 = st.columns([1,1,1,1])
         with c1:
             st.page_link("app.py", label="🏠 Ana Sayfa")
         with c2:
@@ -175,7 +176,7 @@ def render_navbar():
         with c3:
             st.page_link("pages/profile.py", label="👤 Profil")
         with c4:
-            st.page_link("pages/events.py", label="🎫 Etkinlikler")
+            st.page_link("pages/events.py", label="🗓️ Etkinlikler")
         st.markdown("---")
 
 # -----------------------------
@@ -209,7 +210,11 @@ def main():
                 st.session_state.participant_user_id = int(user_id)
                 st.switch_page("pages/join_by_code.py")
         with c2:
-            st.info("🗓️ **My Agenda** — Buradan takvim görünümüne gidecek (henüz bağlanmadı).")
+            # 🔁 Replaced placeholder with real navigation to Agenda
+            if st.button("🗓️ Ajandam", use_container_width=True):
+                # Keep user context and navigate
+                st.session_state.current_user_id = int(user_id)
+                st.switch_page("pages/agenda.py")
 
     st.markdown("---")
 
@@ -224,28 +229,17 @@ def main():
 
     st.markdown("---")
 
-    # Section: Friends are attending (empty for now)
+    # Section: Friends are attending (placeholder)
     st.header("👥 Arkadaşlarının Katıldığı Etkinlikler")
     st.caption("Bu bölüm daha sonra doldurulacak.")
     st.empty()
 
     st.markdown("---")
 
-    # Section: Events You May Like (empty for now)
+    # Section: Events You May Like (placeholder)
     st.header("⭐ Hoşuna Gidebilecek Etkinlikler")
-    st.caption("Öneri motoru eklenecek.")
+    st.caption("Öneriler yakında burada görünecek.")
     st.empty()
-
-    st.markdown("---")
-
-    # Section: Challenges & Achievements (empty for now)
-    st.header("🏆 Challenges & Achievements")
-    st.caption("Oyunlaştırma bileşenleri burada gösterilecek.")
-    st.empty()
-
-    st.markdown("---")
-    if st.button("🔄 Yenile", type="secondary", use_container_width=True):
-        st.rerun()
 
 if __name__ == "__main__":
     main()
