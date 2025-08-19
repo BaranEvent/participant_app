@@ -115,6 +115,51 @@ def create_participant_notification(ev: dict, participant_id: int):
         # non-fatal for the join flow
         st.warning(f"Bildirim oluşturulamadı: {e}")
 
+# ---------- NEW: upsert agenda_items on join ----------
+def _upsert_agenda_item_for_event(ev: dict, participant_id: int):
+    """
+    Ensure an agenda_items row exists for this participant & event.
+    Adds event_id to agenda_items as requested.
+    """
+    try:
+        # Resolve numeric event id
+        event_id_num = ev.get("numeric_id")
+        if event_id_num is None:
+            event_id_num = ensure_numeric_event_id(ev.get("record_id"))
+        if event_id_num is None:
+            return  # can't proceed without numeric id
+
+        # Check if agenda item already exists for (participant_id, event_id)
+        formula = f"AND({{participant_id}} = {int(participant_id)}, {{event_id}} = {int(event_id_num)})"
+        existing = t("agenda_items").all(formula=formula, max_records=1)
+
+        # Build payload from event fields
+        start_dt = ev.get("start_date") or ""
+        end_dt = ev.get("end_date") or ""
+        payload = {
+            "participant_id": int(participant_id),
+            "event_id": int(event_id_num),
+            "name": ev.get("name", "") or "Etkinlik",
+            "start_date": start_dt,
+            "end_date": end_dt,
+        }
+        # Map optional fields to agenda schema (agenda.py uses 'location' & 'detailed_address')
+        if ev.get("description"): payload["description"] = ev["description"]
+        if ev.get("type"):        payload["type"] = ev["type"]
+        if ev.get("location_name"):   payload["location"] = ev["location_name"]
+        if ev.get("detailed_address"): payload["detailed_address"] = ev["detailed_address"]
+
+        if existing:
+            # Update existing row
+            t("agenda_items").update(existing[0]["id"], payload)
+        else:
+            # Create new row
+            t("agenda_items").create(payload)
+
+    except Exception as e:
+        # Don't block the join flow; surface as a warning
+        st.warning(f"Agenda güncellenemedi: {e}")
+
 def render_event_card(ev, user_id, already_numeric_ids, already_rec_ids):
     # Hide if user already participating
     if (ev.get("numeric_id") and ev["numeric_id"] in already_numeric_ids) or (ev.get("record_id") in already_rec_ids):
@@ -148,6 +193,9 @@ def render_event_card(ev, user_id, already_numeric_ids, already_rec_ids):
 
                     # Create participant notification
                     create_participant_notification(ev, int(user_id))
+
+                    # NEW: Upsert into agenda_items (with event_id)
+                    _upsert_agenda_item_for_event(ev, int(user_id))
 
                     st.success("Etkinliğe katıldın!")
                     st.rerun()

@@ -61,6 +61,42 @@ def create_participant_notification_from_row(event_row: dict, participant_id: in
         # non-fatal for flow
         st.warning(f"Bildirim oluşturulamadı: {e}")
 
+# ---------- NEW: upsert agenda_items on join by code ----------
+def _upsert_agenda_item_for_event_row(event_row: dict, participant_id: int):
+    """
+    Ensure an agenda_items row exists for this participant & event.
+    Uses the event Airtable row directly; includes event_id.
+    """
+    try:
+        f = event_row.get("fields", {}) if event_row else {}
+        eid = f.get("id")
+        if eid is None:
+            return
+
+        # Check existing agenda item for (participant_id, event_id)
+        formula = f"AND({{participant_id}} = {int(participant_id)}, {{event_id}} = {int(eid)})"
+        existing = t("agenda_items").all(formula=formula, max_records=1)
+
+        payload = {
+            "participant_id": int(participant_id),
+            "event_id": int(eid),
+            "name": f.get("name","") or "Etkinlik",
+            "start_date": f.get("start_date",""),
+            "end_date": f.get("end_date",""),
+        }
+        if f.get("description"):      payload["description"] = f["description"]
+        if f.get("type"):             payload["type"] = f["type"]
+        if f.get("location_name"):    payload["location"] = f["location_name"]
+        if f.get("detailed_address"): payload["detailed_address"] = f["detailed_address"]
+
+        if existing:
+            t("agenda_items").update(existing[0]["id"], payload)
+        else:
+            t("agenda_items").create(payload)
+
+    except Exception as e:
+        st.warning(f"Agenda güncellenemedi: {e}")
+
 def redirect_to_event_app(ev_row: dict):
     """Set session context and go to event_app page."""
     f = ev_row.get("fields", {})
@@ -98,11 +134,13 @@ def main():
 
         # If already joined -> inform and redirect
         if already_joined(participant_id, int(event_numeric_id)):
+            # Even if already joined, make sure agenda item exists for this event
+            _upsert_agenda_item_for_event_row(ev, participant_id)
             st.info("Bu etkinliğe zaten katıldın, yönlendiriliyorsun…")
             redirect_to_event_app(ev)
             return
 
-        # NEW: Auto-join + notification + redirect
+        # Auto-join + notification + agenda upsert + redirect
         try:
             # Create participation
             t("event_participants").create({
@@ -111,6 +149,8 @@ def main():
             })
             # Create notification
             create_participant_notification_from_row(ev, participant_id)
+            # NEW: Upsert into agenda_items (with event_id)
+            _upsert_agenda_item_for_event_row(ev, participant_id)
 
             st.success("Etkinliğe katıldın! Yönlendiriliyorsun…")
             redirect_to_event_app(ev)
